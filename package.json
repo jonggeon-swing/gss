@@ -1,0 +1,25 @@
+{
+  "name": "gss",
+  "version": "0.1.0",
+  "description": "Git Shadow Session — multi-agent parallel branch development in a single directory",
+  "type": "module",
+  "bin": {
+    "gss": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts --format esm --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
