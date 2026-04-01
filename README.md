@@ -68,7 +68,7 @@ Phase 2 — 브랜치 전환
        실패 시: stash pop으로 롤백
 
 Phase 3 — 대상 세션 복원
-  ⑩ .agents/index-<대상브랜치> 있으면 GIT_INDEX_FILE 설정 (eval 패턴)
+  ⑩ .agents/index-<대상브랜치> 있으면 stdout에 export 출력 (셸 래퍼가 안전하게 적용)
   ⑪ git stash list에서 "gss/session-<대상브랜치>" 검색 → stash pop
 
 Phase 4 — 상태 갱신
@@ -82,12 +82,15 @@ Phase 4 — 상태 갱신
 
 Git의 `GIT_INDEX_FILE` 환경변수를 이용해 **브랜치마다 별도의 스테이징 영역**을 사용한다.
 
-```bash
-# gss switch가 stdout으로 이 줄을 출력한다
+`gss switch`는 필요한 경우 stdout에 다음 줄을 출력한다:
+
+```
 export GIT_INDEX_FILE="/path/to/repo/.agents/index-login-ui"
 ```
 
-`eval $(gss switch login-ui)` 패턴으로 부모 셸에 이 변수를 주입하면, 해당 터미널의 `git add` / `git diff --cached`가 다른 에이전트의 스테이징과 완전히 분리된다.
+이 줄을 부모 셸 환경에 반영해야 `git add` / `git diff --cached`가 에이전트 간 완전히 분리된다.
+
+**`eval $(gss switch ...)` 패턴은 쓰지 않는다.** stdout이 오염될 경우 임의 코드가 실행되는 보안 위험이 있다. 대신 `gss config`가 생성하는 셸 래퍼 함수를 사용한다 (아래 [설치](#설치) 참고).
 
 ---
 
@@ -219,27 +222,89 @@ Waiting Queue (1):
 - Git 2.23 이상
 - macOS / Linux (POSIX 파일시스템 필수 — Windows는 `O_EXCL` 원자성 미보장)
 
-### npm을 통한 전역 설치
+### 1단계 — 바이너리 설치
 
 ```bash
 npm install -g gss
 ```
 
-### 소스에서 직접 빌드
+소스에서 직접 빌드하는 경우:
 
 ```bash
-git clone <repo-url> gss
+git clone git@github.com:jonggeon-swing/gss.git
 cd gss
-npm install
-npm run build
-npm link        # gss 명령어를 전역으로 등록
+npm install && npm run build
+npm link
 ```
+
+### 2단계 — 셸 통합 설치 (필수)
+
+`gss switch` 명령이 `GIT_INDEX_FILE`을 현재 셸에 안전하게 전달하려면 셸 래퍼 함수가 필요하다.
+
+```bash
+# 자동 설치 (셸 자동 감지 후 config 파일에 추가)
+gss config --install
+
+# 셸을 직접 지정
+gss config --shell zsh --install
+gss config --shell bash --install
+gss config --shell fish --install
+```
+
+설치 후 셸을 재시작하거나 config 파일을 다시 로드한다:
+
+```bash
+source ~/.zshrc    # zsh
+source ~/.bashrc   # bash
+# fish는 자동 적용
+```
+
+#### 셸 래퍼가 하는 일
+
+`gss config`가 생성하는 코드는 아래와 같이 동작한다. 직접 확인하려면:
+
+```bash
+gss config --shell zsh   # 설치 없이 stdout으로만 출력
+```
+
+```bash
+# 생성된 래퍼 함수 (요약)
+gss() {
+  if [ "${1:-}" = "switch" ]; then
+    _tmpfile="$(mktemp)"
+    # stdout(export 줄)을 tmpfile로 캡처, stderr(상태 메시지)는 터미널로 출력
+    "/usr/local/bin/gss" "$@" > "$_tmpfile"
+    _rc=$?
+    if [ "$_rc" -eq 0 ]; then
+      while IFS= read -r _line; do
+        # 화이트리스트: export GIT_INDEX_FILE="<안전한 경로>" 줄만 허용
+        case "$_line" in
+          export\ GIT_INDEX_FILE=\"[A-Za-z0-9/._%-]*)
+            eval "$_line" ;;   # 검증된 줄만 eval
+        esac
+      done < "$_tmpfile"
+    fi
+    rm -f "$_tmpfile"
+    return "$_rc"
+  fi
+  "/usr/local/bin/gss" "$@"   # 그 외 명령은 바이너리에 직접 전달
+}
+```
+
+**보안 개선 포인트 (vs. `eval $(gss switch ...)`):**
+
+| | 기존 `eval $(...)` | `gss config` 래퍼 |
+|--|--|--|
+| stdout 오염 시 | 임의 코드 실행 | 화이트리스트 불일치 → 무시 |
+| eval 빈도 | **매번** switch 할 때마다 | 셸 시작 시 **한 번** (함수 정의) |
+| 허용 패턴 | stdout 전체 | `export GIT_INDEX_FILE="<경로>"` 만 |
+| 경로 허용 문자 | 제한 없음 | `[A-Za-z0-9/._%-]` 만 |
 
 ### 설치 확인
 
 ```bash
 gss --version   # 0.1.0
-gss --help
+gss switch --help
 ```
 
 ---
@@ -269,9 +334,10 @@ export GSS_AGENT_ID=agent-auth
 
 ### 3. 브랜치 세션 전환
 
+`gss config --install`로 셸 통합이 설치된 이후에는 그냥 실행한다:
+
 ```bash
-# 반드시 eval로 실행 — GIT_INDEX_FILE 전파를 위해 필수
-eval $(gss switch login-ui)
+gss switch login-ui
 ```
 
 현재 변경사항이 있으면 자동으로 stash된다. 이전에 이 브랜치에서 작업했던 내용은 자동으로 복원된다.
@@ -324,13 +390,13 @@ gss init
 
 ### `gss switch <branch>`
 
-브랜치 세션을 전환한다. **반드시 `eval`로 실행해야 한다.**
+브랜치 세션을 전환한다.
 
 ```bash
-eval $(gss switch <branch>)
+gss switch login-ui
 ```
 
-`eval` 없이 실행하면 브랜치 체크아웃과 stash 복원은 되지만, `GIT_INDEX_FILE`(Shadow Index)이 현재 셸에 전파되지 않는다.
+`gss config --install` 이후에는 셸 래퍼 함수가 `GIT_INDEX_FILE` 전파를 자동으로 처리한다. 셸 통합 없이 바이너리를 직접 실행하면 브랜치 체크아웃과 stash 복원은 동작하지만 Shadow Index(스테이징 분리)가 적용되지 않는다.
 
 **동작:**
 1. 현재 변경사항을 `gss/session-<현재브랜치>` 이름으로 stash
@@ -393,6 +459,26 @@ gss wait src/types/user.ts --timeout 120   # 대기 시간 120초
 
 ---
 
+### `gss config`
+
+셸 통합 래퍼 함수를 생성하거나 셸 config 파일에 설치한다.
+
+```bash
+gss config                        # 현재 셸 자동 감지 후 스니펫 출력
+gss config --shell zsh            # zsh용 스니펫 출력 (설치 없음)
+gss config --shell bash --install # ~/.bashrc에 자동 추가
+gss config --shell fish --install # fish config에 자동 추가
+```
+
+이미 설치된 경우 다시 `--install`하면 중복 방지 에러가 발생한다. 업데이트하려면 `~/.zshrc`에서 기존 블록(`# GSS — Git Shadow Session shell integration` ~ 함수 끝)을 삭제 후 재실행한다.
+
+| 옵션 | 설명 |
+|------|------|
+| `-s, --shell <shell>` | 대상 셸: `zsh` \| `bash` \| `fish` |
+| `--install` | 셸 config 파일에 자동 추가 |
+
+---
+
 ### `gss status`
 
 모든 에이전트의 현재 상태를 출력한다.
@@ -438,10 +524,10 @@ gss release src/auth/middleware.ts
 
 ### Shadow Index 없이 사용 (단순 모드)
 
-`eval`이 번거로운 경우, Shadow Index 없이 Stash-wrapper만 사용할 수 있다. 스테이징 영역은 공유되지만 브랜치 전환과 파일 락은 정상 동작한다.
+`gss config --install` 없이 바이너리를 직접 실행하면 Shadow Index 없이 Stash-wrapper만 동작한다. 스테이징 영역은 에이전트 간 공유되지만, 브랜치 전환과 파일 락은 정상 동작한다.
 
 ```bash
-# eval 없이 실행 — GIT_INDEX_FILE 미적용
+# 셸 통합 없이 직접 실행 — GIT_INDEX_FILE 미적용
 gss switch login-ui
 ```
 
@@ -507,9 +593,9 @@ Check agent status with: gss status
 
 ## 주의사항 및 제한
 
-### `eval $(gss switch ...)` 필수
+### 셸 통합 설치 권장
 
-Shadow Index(`GIT_INDEX_FILE`)는 자식 프로세스에서 부모 셸의 환경변수를 수정할 수 없는 POSIX 제약 때문에 `eval` 패턴이 필요하다. `eval` 없이 실행하면 브랜치 전환과 stash 복원은 되지만 스테이징 영역 격리가 적용되지 않는다.
+Shadow Index(`GIT_INDEX_FILE`)는 자식 프로세스에서 부모 셸의 환경변수를 수정할 수 없는 POSIX 제약 때문에 셸 함수 래퍼가 필요하다. `gss config --install`로 한 번만 설치하면 이후 `gss switch <branch>` 단독 실행으로 모든 기능이 동작한다. 설치하지 않으면 브랜치 전환과 stash 복원은 되지만 스테이징 영역 격리가 적용되지 않는다.
 
 ### `--include-untracked` 미사용 (기본)
 

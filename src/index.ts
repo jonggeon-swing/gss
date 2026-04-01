@@ -6,6 +6,7 @@ import { runLock } from "./commands/lock.js";
 import { runRelease } from "./commands/release.js";
 import { runWait } from "./commands/wait.js";
 import { runStatus } from "./commands/status.js";
+import { runConfig } from "./commands/config.js";
 
 const program = new Command();
 
@@ -30,8 +31,7 @@ program
   .command("switch <branch>")
   .description(
     "Switch to a branch session (stash current changes, checkout, restore session stash).\n" +
-      "IMPORTANT: Use with eval to propagate GIT_INDEX_FILE:\n" +
-      "  eval $(gss switch <branch>)"
+      "Run 'gss config --install' once to enable shell integration — then just: gss switch <branch>"
   )
   .action(async (branch: string) => {
     try {
@@ -86,6 +86,28 @@ program
   .action(() => {
     try {
       runStatus();
+    } catch (e) {
+      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("config")
+  .description(
+    "Generate or install shell integration for safe GIT_INDEX_FILE propagation.\n" +
+      "Replaces the insecure 'eval $(gss switch ...)' pattern.\n\n" +
+      "Examples:\n" +
+      "  gss config                     # print snippet (auto-detect shell)\n" +
+      "  gss config --shell zsh         # print snippet for zsh\n" +
+      "  gss config --install           # append to ~/.zshrc (or shell config)\n" +
+      "  gss config --shell bash --install"
+  )
+  .option("-s, --shell <shell>", "Target shell: zsh | bash | fish")
+  .option("--install", "Append the integration snippet to your shell config file")
+  .action((opts: { shell?: string; install?: boolean }) => {
+    try {
+      runConfig(opts);
     } catch (e) {
       console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
       process.exit(1);
